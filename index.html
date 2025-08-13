@@ -591,12 +591,17 @@
 
             for (let i = 1; i <= pdfJsDocument.numPages; i++) {
                 const page = await pdfJsDocument.getPage(i);
+                const baseRotation = page.rotate ? page.rotate : 0; // PDF.js gives original rotation
                 const pageData = {
                     pageNumber: i,
-                    rotation: 0,
+                    baseRotation: baseRotation,
+                    baseRotation: page.rotate ? page.rotate : 0, // PDF.js original rotation
+                    rotation: 0, // user's added rotation
                     deleted: false,
                     originalPage: page
+
                 };
+
                 pages.push(pageData);
                 await renderPageThumbnail(pageData, i - 1);
                 updateProgress((i / pdfJsDocument.numPages) * 100);
@@ -606,7 +611,11 @@
         async function renderPageThumbnail(pageData, index) {
             const page = pageData.originalPage;
             const scale = 0.5;
-            const viewport = page.getViewport({ scale, rotation: pageData.rotation });
+            const viewport = page.getViewport({
+                scale,
+                rotation: (pageData.baseRotation + pageData.rotation) % 360
+            });
+
 
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -681,7 +690,10 @@
             
             const page = pageData.originalPage;
             const scale = 0.5;
-            const viewport = page.getViewport({ scale, rotation: pageData.rotation });
+            const viewport = page.getViewport({
+                scale,
+                rotation: (pageData.baseRotation + pageData.rotation) % 360
+            });
 
             canvas.height = viewport.height;
             canvas.width = viewport.width;
@@ -802,26 +814,42 @@
             showProgress(true);
 
             try {
-                // Create new PDF document
                 const newPdfDoc = await PDFLib.PDFDocument.create();
-                
-                // Load the original PDF using the stored bytes
                 const originalDoc = await PDFLib.PDFDocument.load(originalFileBytes);
 
                 let processedPages = 0;
+
                 for (let i = 0; i < pages.length; i++) {
                     const pageData = pages[i];
                     if (!pageData.deleted) {
-                        // Copy the page from original document
-                        const [copiedPage] = await newPdfDoc.copyPages(originalDoc, [pageData.pageNumber - 1]);
-                        
-                        // Apply rotation if needed
-                        if (pageData.rotation !== 0) {
-                            copiedPage.setRotation(PDFLib.degrees(pageData.rotation));
+                        const [oldPage] = await originalDoc.copyPages(originalDoc, [pageData.pageNumber - 1]);
+
+                        // Determine final rotation (existing + user-applied)
+                        const finalRotation = (pageData.baseRotation + pageData.rotation) % 360;
+
+                        const { width, height } = oldPage.getSize();
+                        let newWidth = width;
+                        let newHeight = height;
+
+                        // Swap dimensions for 90/270 rotations
+                        if (finalRotation === 90 || finalRotation === 270) {
+                            newWidth = height;
+                            newHeight = width;
                         }
-                        
-                        // Add the page to the new document
-                        newPdfDoc.addPage(copiedPage);
+
+                        // Create a new blank page in the output doc
+                        const newPage = newPdfDoc.addPage([newWidth, newHeight]);
+
+                        // Embed the page content from original PDF
+                        const embeddedPage = await newPdfDoc.embedPage(oldPage);
+
+                        // Draw it physically rotated
+                        newPage.drawPage(embeddedPage, {
+                            x: 0,
+                            y: 0,
+                            rotate: PDFLib.degrees(finalRotation),
+                        });
+
                         processedPages++;
                         updateProgress((processedPages / activePagesCount) * 100);
                     }
@@ -830,7 +858,7 @@
                 const pdfBytes = await newPdfDoc.save();
                 const blob = new Blob([pdfBytes], { type: 'application/pdf' });
                 const fileName = `${originalFileName}_edited.pdf`;
-                
+
                 saveAs(blob, fileName);
                 showStatus(`Successfully downloaded ${fileName}!`, 'success');
             } catch (error) {
@@ -840,6 +868,7 @@
                 showProgress(false);
             }
         }
+
 
         function showStatus(message, type) {
             statusMessage.textContent = message;
