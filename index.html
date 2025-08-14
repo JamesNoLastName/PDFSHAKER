@@ -824,31 +824,47 @@
                     if (!pageData.deleted) {
                         const [oldPage] = await originalDoc.copyPages(originalDoc, [pageData.pageNumber - 1]);
 
-                        // Determine final rotation (existing + user-applied)
+                        // Determine final rotation
                         const finalRotation = (pageData.baseRotation + pageData.rotation) % 360;
-
+                        // Get original page size
                         const { width, height } = oldPage.getSize();
                         let newWidth = width;
                         let newHeight = height;
 
-                        // Swap dimensions for 90/270 rotations
                         if (finalRotation === 90 || finalRotation === 270) {
-                            newWidth = height;
-                            newHeight = width;
+                        newWidth = height;
+                        newHeight = width;
                         }
 
-                        // Create a new blank page in the output doc
                         const newPage = newPdfDoc.addPage([newWidth, newHeight]);
-
-                        // Embed the page content from original PDF
                         const embeddedPage = await newPdfDoc.embedPage(oldPage);
 
-                        // Draw it physically rotated
+                        // Scale to fit
+                        const scaleX = newWidth / width;
+                        const scaleY = newHeight / height;
+
+                        // Apply translation so rotated content stays in view
+                        let translateX = 0;
+                        let translateY = 0;
+
+                        if (finalRotation === 90) {
+                        translateX = newWidth;
+                        translateY = 0;
+                        } else if (finalRotation === 180) {
+                        translateX = newWidth;
+                        translateY = newHeight;
+                        } else if (finalRotation === 270) {
+                        translateX = 0;
+                        translateY = newHeight;
+                        }
+
                         newPage.drawPage(embeddedPage, {
-                            x: 0,
-                            y: 0,
-                            rotate: PDFLib.degrees(finalRotation),
+                        x: translateX,
+                        y: translateY,
+                        rotate: PDFLib.degrees(finalRotation),
+                        scale: Math.min(scaleX, scaleY),
                         });
+
 
                         processedPages++;
                         updateProgress((processedPages / activePagesCount) * 100);
